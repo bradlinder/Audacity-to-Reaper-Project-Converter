@@ -1,4 +1,4 @@
-﻿"""Tests for effect mapping and ReaScript Lua generation."""
+"""Tests for effect mapping and ReaScript Lua generation."""
 
 import tempfile
 import unittest
@@ -86,6 +86,73 @@ class TestFXMapper(unittest.TestCase):
             self.assertIn("reaper.TrackFX_SetParam(track, fx_idx, 1, 2.5)", script)
             self.assertIn("reaper.TrackFX_SetParam(track, fx_idx, 2, 100.0)", script)
             self.assertIn("reaper.TrackFX_SetParam(track, fx_idx, 3, 800.0)", script)
+
+
+    def test_reaper_vst_entry_stock_effects(self):
+        """Verify ReaperFXEntry creation for all Cockos stock Rea-family plugins."""
+        project = AudacityProject(project_path=Path("proj.aup3"), name="proj")
+        mapper = FXMapper(project)
+
+        # 1. Compressor -> ReaComp
+        comp = Effect(effect_id="builtin:compressor", parameters={"Threshold": "-12.0"})
+        e_comp = mapper.get_reaper_vst_entry(comp)
+        self.assertEqual(e_comp.tag, "VST")
+        self.assertEqual(e_comp.display_name, "VST: ReaComp (Cockos)")
+        self.assertEqual(e_comp.dll_name, "reacomp.dll")
+        self.assertEqual(e_comp.plugin_id, 1919247213)
+        self.assertTrue(e_comp.active)
+
+        # 2. Equalizer -> ReaEQ
+        eq = Effect(effect_id="builtin:equalizer", parameters={"HighpassCutoff": "80.0"})
+        e_eq = mapper.get_reaper_vst_entry(eq)
+        self.assertEqual(e_eq.tag, "VST")
+        self.assertEqual(e_eq.display_name, "VST: ReaEQ (Cockos)")
+        self.assertEqual(e_eq.dll_name, "reaeq.dll")
+        self.assertEqual(e_eq.plugin_id, 1919247729)
+
+        # 3. Delay -> ReaDelay
+        delay = Effect(effect_id="builtin:delay", parameters={"DelayTime": "0.25"})
+        e_delay = mapper.get_reaper_vst_entry(delay)
+        self.assertEqual(e_delay.tag, "VST")
+        self.assertEqual(e_delay.display_name, "VST: ReaDelay (Cockos)")
+        self.assertEqual(e_delay.dll_name, "readelay.dll")
+        self.assertEqual(e_delay.plugin_id, 1919247212)
+
+        # 4. Reverb -> ReaVerbate
+        reverb = Effect(effect_id="builtin:reverb", parameters={"RoomSize": "60.0"})
+        e_reverb = mapper.get_reaper_vst_entry(reverb)
+        self.assertEqual(e_reverb.tag, "VST")
+        self.assertEqual(e_reverb.display_name, "VST: ReaVerbate (Cockos)")
+        self.assertEqual(e_reverb.dll_name, "reaverbate.dll")
+        self.assertEqual(e_reverb.plugin_id, 1919251058)
+
+        # 5. Limiter -> ReaLimit
+        limiter = Effect(effect_id="builtin:limiter", parameters={"Threshold": "-0.5"})
+        e_limiter = mapper.get_reaper_vst_entry(limiter)
+        self.assertEqual(e_limiter.tag, "VST")
+        self.assertEqual(e_limiter.display_name, "VST: ReaLimit (Cockos)")
+        self.assertEqual(e_limiter.dll_name, "realimit.dll")
+        self.assertEqual(e_limiter.plugin_id, 1919251053)
+
+    def test_reaper_vst_entry_vst3_with_chunk_data(self):
+        """Verify ReaperFXEntry for third-party VST3 preserves binary chunk blobs."""
+        project = AudacityProject(project_path=Path("proj.aup3"), name="proj")
+        mapper = FXMapper(project)
+
+        sample_chunk = "c2FlcgEAAAACAAAAAQAAAAAAAAACAAAAAAAAAA=="
+        eff = Effect(
+            effect_id="VST3:iZotope Ozone 11",
+            active=False,
+            parameters={"Ceiling": "-0.3"},
+            chunk_data=sample_chunk,
+        )
+        entry = mapper.get_reaper_vst_entry(eff)
+        self.assertEqual(entry.tag, "VST3")
+        self.assertEqual(entry.display_name, "VST3: iZotope Ozone 11")
+        self.assertEqual(entry.dll_name, "iZotope Ozone 11.vst3")
+        self.assertEqual(entry.plugin_id, 0)
+        self.assertFalse(entry.active)
+        self.assertEqual(entry.chunk_data, sample_chunk)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from audacity_to_reaper.models import AudacityProject, Clip, Marker, Region, Track
+from audacity_to_reaper.models import AudacityProject, Clip, Effect, Marker, Region, Track
 from audacity_to_reaper.rpp_generator import RPPGenerator
 
 
@@ -293,6 +293,99 @@ class TestRPPGenerator(unittest.TestCase):
             self.assertIn("NCHAN 2", text)
             self.assertIn("VOLPAN 1.000000 0.000000 -1.0 -1.0 1.0", text)
             self.assertIn("CHANMODE 0", text)
+
+    def test_embedded_track_fxchain(self):
+        """Verify that track effects embed directly into standard REAPER <FXCHAIN> blocks."""
+        project = AudacityProject(project_path=Path("demo.aup3"), name="FXTest", sample_rate=44100)
+        track = Track(track_id=1, name="Vocal Stem")
+        track.effects.append(
+            Effect(
+                effect_id="Audacity:builtin:compressor",
+                parameters={"Threshold": "-16.0", "Ratio": "3.5"},
+                active=True,
+            )
+        )
+        track.effects.append(
+            Effect(
+                effect_id="Audacity:builtin:equalizer",
+                parameters={"HighpassCutoff": "90.0"},
+                active=False,  # Bypassed
+            )
+        )
+        project.tracks.append(track)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_rpp = Path(tmp_dir) / "fx_test.rpp"
+            gen = RPPGenerator(project, out_rpp, embed_fx=True)
+            text = gen.generate()
+
+            # Verify <FXCHAIN block exists inside track
+            self.assertIn("<FXCHAIN", text)
+            self.assertIn("WNDRECT 0 0 0 0", text)
+
+            # First effect: ReaComp (Active -> BYPASS 0 0 0)
+            self.assertIn("BYPASS 0 0 0", text)
+            self.assertIn('<VST "VST: ReaComp (Cockos)" "reacomp.dll" 0 "" 1919247213 ""', text)
+            self.assertIn("FLOATPOS 0 0 0 0", text)
+            self.assertIn("FXID {", text)
+            self.assertIn("WAK 0 0", text)
+
+            # Second effect: ReaEQ (Bypassed -> BYPASS 1 0 0)
+            self.assertIn("BYPASS 1 0 0", text)
+            self.assertIn('<VST "VST: ReaEQ (Cockos)" "reaeq.dll" 0 "" 1919247729 ""', text)
+
+            # Verify Notes summary
+            self.assertIn("Realtime FX Chains: 2 track effect(s) embedded directly in <FXCHAIN>", text)
+
+    def test_vst3_chunk_data_embedding(self):
+        """Verify third-party VST3 preserves binary chunk states and emits valid <VST3 chunk."""
+        project = AudacityProject(project_path=Path("demo.aup3"), name="VST3ChunkTest", sample_rate=48000)
+        track = Track(track_id=1, name="Master Track")
+        chunk_payload = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NTY3ODk="
+        track.effects.append(
+            Effect(
+                effect_id="VST3:FabFilter Pro-L 2",
+                active=True,
+                chunk_data=chunk_payload,
+            )
+        )
+        project.tracks.append(track)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_rpp = Path(tmp_dir) / "vst3_test.rpp"
+            gen = RPPGenerator(project, out_rpp, embed_fx=True)
+            text = gen.generate()
+
+            self.assertIn('<VST3 "VST3: FabFilter Pro-L 2" "FabFilter Pro-L 2.vst3" 0 "" 0 ""', text)
+            self.assertIn(chunk_payload, text)
+            self.assertIn("FXID {", text)
+
+    def test_embed_fx_disabled_option(self):
+        """Verify embed_fx=False omits <FXCHAIN> chunk from track."""
+        project = AudacityProject(project_path=Path("demo.aup3"), name="NoFXTest", sample_rate=44100)
+        track = Track(track_id=1, name="Track With FX")
+        track.effects.append(Effect(effect_id="builtin:compressor"))
+        project.tracks.append(track)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_rpp = Path(tmp_dir) / "no_fx.rpp"
+            gen = RPPGenerator(project, out_rpp, embed_fx=False)
+            text = gen.generate()
+
+            self.assertNotIn("<FXCHAIN", text)
+
+    def test_master_fxchain_embedding(self):
+        """Verify master effects generate <MASTERFXCHAIN> chunk."""
+        project = AudacityProject(project_path=Path("demo.aup3"), name="MasterFXTest", sample_rate=44100)
+        project.master_effects.append(Effect(effect_id="builtin:limiter", active=True))
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_rpp = Path(tmp_dir) / "master_fx.rpp"
+            gen = RPPGenerator(project, out_rpp, embed_fx=True)
+            text = gen.generate()
+
+            self.assertIn("<MASTERFXCHAIN", text)
+            self.assertIn('<VST "VST: ReaLimit (Cockos)" "realimit.dll" 0 "" 1919251053 ""', text)
 
 
 if __name__ == "__main__":

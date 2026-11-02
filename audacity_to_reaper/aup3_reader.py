@@ -845,20 +845,27 @@ class AUP3Reader:
                     region_id += 1
 
     def _parse_effect(self, elem: ET.Element) -> Optional[Effect]:
-        """Parse an <effect> element and its key-value parameters."""
+        """Parse an <effect> element and its key-value parameters or state blobs."""
         eff_id = elem.attrib.get("id", "")
         if not eff_id:
             return None
 
+        name = elem.attrib.get("name", "")
         version = elem.attrib.get("version", "")
         active = elem.attrib.get("active", "1") in ("1", "true", "True")
         params: Dict[str, str] = {}
+        chunk_data: Optional[str] = (
+            elem.attrib.get("data")
+            or elem.attrib.get("chunk")
+            or elem.attrib.get("state")
+            or elem.attrib.get("preset")
+        )
 
         for child in elem:
-            ctag = strip_ns(child.tag)
+            ctag = strip_ns(child.tag).lower()
             if ctag == "parameters":
                 for param in child:
-                    if strip_ns(param.tag) == "parameter":
+                    if strip_ns(param.tag).lower() == "parameter":
                         pname = param.attrib.get("name")
                         pval = param.attrib.get("value")
                         if pname and pval is not None:
@@ -868,12 +875,16 @@ class AUP3Reader:
                 pval = child.attrib.get("value")
                 if pname and pval is not None:
                     params[pname] = pval
+            elif ctag in ("data", "chunk", "state", "raw", "preset", "blob") and child.text:
+                chunk_data = child.text.strip()
 
         return Effect(
             effect_id=eff_id,
+            name=name,
             version=version,
             active=active,
             parameters=params,
+            chunk_data=chunk_data,
         )
 
     def _parse_from_sampleblocks_fallback(self, proj: AudacityProject) -> None:

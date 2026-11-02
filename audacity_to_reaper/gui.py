@@ -82,6 +82,7 @@ def launch_qt_gui() -> int:
             extract_fx: bool,
             dry_run: bool,
             envelope_mode: str = "clip",
+            embed_fx: bool = True,
         ) -> None:
             super().__init__()
             self.aup3_path = aup3_path
@@ -89,6 +90,7 @@ def launch_qt_gui() -> int:
             self.extract_fx = extract_fx
             self.dry_run = dry_run
             self.envelope_mode = envelope_mode
+            self.embed_fx = embed_fx
 
         def run(self) -> None:
             try:
@@ -96,6 +98,7 @@ def launch_qt_gui() -> int:
                     aup3_path=self.aup3_path,
                     output_dir=self.output_dir,
                     extract_fx_script=self.extract_fx,
+                    embed_fx=self.embed_fx,
                     envelope_mode=self.envelope_mode,
                     dry_run=self.dry_run,
                     progress_callback=self.progress_signal.emit,
@@ -177,12 +180,17 @@ def launch_qt_gui() -> int:
 
             # Options
             options_layout = QHBoxLayout()
-            self.fx_checkbox = QCheckBox("Generate ReaScript FX Loader (session_load_fx.lua)")
+            self.embed_fx_checkbox = QCheckBox("Direct <FXCHAIN> Embedding")
+            self.embed_fx_checkbox.setChecked(True)
+            self.embed_fx_checkbox.setToolTip("Embeds Cockos ReaPlugins and VST/VST3 slots directly into REAPER track blocks in .rpp.")
+            options_layout.addWidget(self.embed_fx_checkbox)
+
+            self.fx_checkbox = QCheckBox("ReaScript FX Loader (.lua)")
             self.fx_checkbox.setChecked(True)
-            self.fx_checkbox.setToolTip("Creates a REAPER Lua script to restore ReaComp, ReaEQ, and VST/VST3 settings.")
+            self.fx_checkbox.setToolTip("Creates a companion REAPER Lua script to restore ReaComp, ReaEQ, and VST slider parameters.")
             options_layout.addWidget(self.fx_checkbox)
 
-            self.dry_run_checkbox = QCheckBox("Dry Run (Inspect only)")
+            self.dry_run_checkbox = QCheckBox("Dry Run")
             self.dry_run_checkbox.setToolTip("Parses the project database and previews summary without extracting audio.")
             options_layout.addWidget(self.dry_run_checkbox)
 
@@ -302,6 +310,7 @@ def launch_qt_gui() -> int:
             output_dir = Path(output_str) if output_str else None
 
             extract_fx = self.fx_checkbox.isChecked()
+            embed_fx = self.embed_fx_checkbox.isChecked()
             dry_run = self.dry_run_checkbox.isChecked()
             envelope_mode = self.env_combo.currentData() or "clip"
 
@@ -311,7 +320,7 @@ def launch_qt_gui() -> int:
             self.open_report_btn.setEnabled(False)
             self.progress_bar.setVisible(True)
             self._log("-" * 60)
-            self._log(f"Starting conversion: {input_path.name} (envelope_mode={envelope_mode})")
+            self._log(f"Starting conversion: {input_path.name} (envelope_mode={envelope_mode}, embed_fx={embed_fx})")
 
             # Launch Background Worker Thread
             self.worker = ConversionWorker(
@@ -320,6 +329,7 @@ def launch_qt_gui() -> int:
                 extract_fx=extract_fx,
                 dry_run=dry_run,
                 envelope_mode=envelope_mode,
+                embed_fx=embed_fx,
             )
             self.worker.progress_signal.connect(self._log)
             self.worker.finished_signal.connect(self._on_conversion_finished)
@@ -487,6 +497,7 @@ def launch_tk_gui() -> int:
     # Variables
     input_var = tk.StringVar()
     output_var = tk.StringVar()
+    embed_fx_var = tk.BooleanVar(value=True)
     fx_var = tk.BooleanVar(value=True)
     dry_var = tk.BooleanVar(value=False)
     last_res = [None]
@@ -531,8 +542,9 @@ def launch_tk_gui() -> int:
 
     opt_frame = ttk.Frame(root)
     opt_frame.pack(fill="x", **pad)
-    ttk.Checkbutton(opt_frame, text="Generate ReaScript FX Loader (.lua)", variable=fx_var).pack(side="left", padx=5)
-    ttk.Checkbutton(opt_frame, text="Dry Run (Inspect only)", variable=dry_var).pack(side="left", padx=5)
+    ttk.Checkbutton(opt_frame, text="Direct <FXCHAIN> Embedding", variable=embed_fx_var).pack(side="left", padx=5)
+    ttk.Checkbutton(opt_frame, text="ReaScript FX (.lua)", variable=fx_var).pack(side="left", padx=5)
+    ttk.Checkbutton(opt_frame, text="Dry Run", variable=dry_var).pack(side="left", padx=5)
 
     env_var = tk.StringVar(value="clip")
     ttk.Label(opt_frame, text="Envelope Target:").pack(side="left", padx=(15, 2))
@@ -576,6 +588,7 @@ def launch_tk_gui() -> int:
                     aup3_path=in_p,
                     output_dir=out_d,
                     extract_fx_script=fx_var.get(),
+                    embed_fx=embed_fx_var.get(),
                     envelope_mode=env_var.get(),
                     dry_run=dry_var.get(),
                     progress_callback=log_msg,

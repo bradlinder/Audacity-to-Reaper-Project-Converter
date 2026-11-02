@@ -146,6 +146,11 @@ class TestEndToEndConversion(unittest.TestCase):
                 self.assertNotIn("<VOLENV2", rpp_text)
                 self.assertIn("|Volume Envelope Mode: Take/Clip Envelopes (VOLENV)", rpp_text)
 
+                # Verify embedded <FXCHAIN> chunk (Item 2.6)
+                self.assertIn("<FXCHAIN", rpp_text)
+                self.assertIn('<VST "VST: ReaComp (Cockos)" "reacomp.dll" 0 "" 1919247213 ""', rpp_text)
+                self.assertEqual(result.embedded_fx_count, 1)
+
             # Check ReaScript Lua
             with open(result.fx_script_file, "r", encoding="utf-8") as f:
                 lua_text = f.read()

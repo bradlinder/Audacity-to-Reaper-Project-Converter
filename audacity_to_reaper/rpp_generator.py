@@ -58,11 +58,13 @@ class RPPGenerator:
         project: AudacityProject,
         output_rpp_path: Path,
         envelope_mode: str = "clip",
+        embed_fx: bool = True,
     ) -> None:
         self.project = project
         self.output_rpp_path = Path(output_rpp_path).resolve()
         self.project_dir = self.output_rpp_path.parent
         self.envelope_mode = envelope_mode.lower() if envelope_mode in ("clip", "track") else "clip"
+        self.embed_fx = embed_fx
 
     def generate(self) -> str:
         """Construct the complete .rpp file text."""
@@ -88,6 +90,10 @@ class RPPGenerator:
 
         # Timeline Markers and Regions
         lines.extend(self._generate_markers_and_regions())
+
+        # Master FX Chain (if project master effects exist)
+        if self.embed_fx and self.project.master_effects:
+            lines.extend(self._generate_master_fxchain_chunk())
 
         # Tracks
         for track in self.project.tracks:
@@ -128,8 +134,13 @@ class RPPGenerator:
 
         effects_count = sum(len(t.effects) for t in self.project.tracks)
         if effects_count > 0:
-            notes.append(f"    |Realtime FX Chains: {effects_count} track effects detected")
-            notes.append("    |Use session_load_fx.lua to restore FX chains and mapped parameters in REAPER.")
+            if self.embed_fx:
+                notes.append(f"    |Realtime FX Chains: {effects_count} track effect(s) embedded directly in <FXCHAIN>")
+                notes.append("    |Stock Cockos plugins and VST/VST3 slots load automatically on project arrange tracks.")
+                notes.append("    |Optional: Run session_load_fx.lua for fine-tuned parameter slider binding.")
+            else:
+                notes.append(f"    |Realtime FX Chains: {effects_count} track effects detected")
+                notes.append("    |Use session_load_fx.lua to restore FX chains and mapped parameters in REAPER.")
 
         env_desc = "Track Automation Lanes (VOLENV2)" if self.envelope_mode == "track" else "Take/Clip Envelopes (VOLENV)"
         notes.append(f"    |Volume Envelope Mode: {env_desc}")
@@ -208,6 +219,11 @@ class RPPGenerator:
             item_chunk = self._generate_item_chunk(clip)
             lines.extend(item_chunk)
 
+        # Embedded Track FX Chain (Roadmap item 2.6)
+        if self.embed_fx and track.effects:
+            fx_chain_chunk = self._generate_fxchain_chunk(track.effects)
+            lines.extend(fx_chain_chunk)
+
         # Track Volume Automation Lane (VOLENV2)
         if self.envelope_mode == "track" and track_envelope_points:
             lines.append("    <VOLENV2")
@@ -218,6 +234,87 @@ class RPPGenerator:
             lines.append("      DEFSHAPE 0 -1 -1")
             for t_pt, v_pt in track_envelope_points:
                 lines.append(f"      PT {t_pt:.6f} {v_pt:.6f} 0 0")
+            lines.append("    >")
+
+        lines.append("  >")
+        return lines
+
+    def _generate_fxchain_chunk(self, effects: List[Effect]) -> List[str]:
+        """Generate standard REAPER <FXCHAIN chunk embedding native Rea-plugins and VST/VST3 effects."""
+        if not effects:
+            return []
+
+        lines: List[str] = [
+            "    <FXCHAIN",
+            "      WNDRECT 0 0 0 0",
+            "      SHOW 0",
+            "      LASTSEL 0",
+            "      DOCKED 0",
+            "      BYPASS 0 0 0",
+        ]
+
+        from .fx_mapper import FXMapper
+        mapper = FXMapper(self.project)
+
+        for eff in effects:
+            entry = mapper.get_reaper_vst_entry(eff)
+            bypass_flag = 0 if eff.active else 1
+            lines.append(f"      BYPASS {bypass_flag} 0 0")
+            lines.append(
+                f'      <{entry.tag} "{entry.display_name}" "{entry.dll_name}" 0 "" {entry.plugin_id} ""'
+            )
+
+            # Embed base64 binary state chunk if present
+            if entry.chunk_data:
+                chunk_str = str(entry.chunk_data).strip()
+                raw_lines = [l.strip() for l in chunk_str.splitlines() if l.strip()]
+                for raw_l in raw_lines:
+                    for i in range(0, len(raw_l), 120):
+                        lines.append(f"        {raw_l[i:i+120]}")
+
+            lines.append("        FLOATPOS 0 0 0 0")
+            lines.append(f"        FXID {generate_guid()}")
+            lines.append("        WAK 0 0")
+            lines.append("      >")
+
+        lines.append("    >")
+        return lines
+
+    def _generate_master_fxchain_chunk(self) -> List[str]:
+        """Generate <MASTERFXCHAIN chunk if master effects are present."""
+        if not self.project.master_effects:
+            return []
+
+        lines: List[str] = [
+            "  <MASTERFXCHAIN",
+            "    WNDRECT 0 0 0 0",
+            "    SHOW 0",
+            "    LASTSEL 0",
+            "    DOCKED 0",
+            "    BYPASS 0 0 0",
+        ]
+
+        from .fx_mapper import FXMapper
+        mapper = FXMapper(self.project)
+
+        for eff in self.project.master_effects:
+            entry = mapper.get_reaper_vst_entry(eff)
+            bypass_flag = 0 if eff.active else 1
+            lines.append(f"    BYPASS {bypass_flag} 0 0")
+            lines.append(
+                f'    <{entry.tag} "{entry.display_name}" "{entry.dll_name}" 0 "" {entry.plugin_id} ""'
+            )
+
+            if entry.chunk_data:
+                chunk_str = str(entry.chunk_data).strip()
+                raw_lines = [l.strip() for l in chunk_str.splitlines() if l.strip()]
+                for raw_l in raw_lines:
+                    for i in range(0, len(raw_l), 120):
+                        lines.append(f"      {raw_l[i:i+120]}")
+
+            lines.append("      FLOATPOS 0 0 0 0")
+            lines.append(f"      FXID {generate_guid()}")
+            lines.append("      WAK 0 0")
             lines.append("    >")
 
         lines.append("  >")

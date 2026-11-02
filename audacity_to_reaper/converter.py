@@ -32,6 +32,8 @@ class ConversionResult:
     total_extracted_files: int = 0
     total_duration_seconds: float = 0.0
     envelope_mode: str = "clip"
+    embed_fx: bool = True
+    embedded_fx_count: int = 0
     is_dry_run: bool = False
     warnings: List[str] = None
     unsupported_features: List[str] = None
@@ -42,6 +44,7 @@ def convert_aup3_to_reaper(
     aup3_path: str | Path,
     output_dir: Optional[str | Path] = None,
     extract_fx_script: bool = True,
+    embed_fx: bool = True,
     envelope_mode: str = "clip",
     dry_run: bool = False,
     progress_callback: Optional[Callable[[str], None]] = None,
@@ -53,6 +56,7 @@ def convert_aup3_to_reaper(
         output_dir: Directory where the converted project, media, and reports will be saved.
                     If omitted, defaults to a folder named `{stem}_reaper` next to the .aup3.
         extract_fx_script: Whether to generate the companion `session_load_fx.lua` script.
+        embed_fx: Whether to embed <FXCHAIN> chunks directly into REAPER track blocks in .rpp.
         envelope_mode: Volume envelope target: 'clip' (take envelope) or 'track' (track automation lane).
         dry_run: If True, inspects and logs the conversion plan without writing any files.
         progress_callback: Optional callback receiving human-readable status updates.
@@ -112,6 +116,8 @@ def convert_aup3_to_reaper(
             total_extracted_files=project.total_clips,
             total_duration_seconds=project.total_duration,
             envelope_mode=envelope_mode,
+            embed_fx=embed_fx,
+            embedded_fx_count=sum(len(t.effects) for t in project.tracks) if embed_fx else 0,
             is_dry_run=True,
             warnings=project.warnings,
             unsupported_features=project.unsupported_features,
@@ -128,8 +134,12 @@ def convert_aup3_to_reaper(
     )
 
     # 2. Generate REAPER .rpp project file
-    log_msg(f"Generating REAPER project file: {rpp_path.name} (envelope_mode={envelope_mode})")
-    rpp_gen = RPPGenerator(project, rpp_path, envelope_mode=envelope_mode)
+    embedded_fx_total = sum(len(t.effects) for t in project.tracks) if embed_fx else 0
+    log_msg(
+        f"Generating REAPER project file: {rpp_path.name} "
+        f"(envelope_mode={envelope_mode}, embed_fx={embed_fx}, fx_count={embedded_fx_total})"
+    )
+    rpp_gen = RPPGenerator(project, rpp_path, envelope_mode=envelope_mode, embed_fx=embed_fx)
     rpp_gen.write()
 
     # 3. Generate ReaScript FX loader script if requested
@@ -140,7 +150,7 @@ def convert_aup3_to_reaper(
 
     # 4. Generate comprehensive migration report
     log_msg(f"Generating Migration Report: {report_path.name}")
-    report_gen = ReportGenerator(project, target_dir, envelope_mode=envelope_mode)
+    report_gen = ReportGenerator(project, target_dir, envelope_mode=envelope_mode, embed_fx=embed_fx)
     report_gen.write(extraction_summary, filename=report_path.name)
 
     log_msg("Conversion successfully completed!")
@@ -158,6 +168,8 @@ def convert_aup3_to_reaper(
         total_extracted_files=extraction_summary["total_files"],
         total_duration_seconds=project.total_duration,
         envelope_mode=envelope_mode,
+        embed_fx=embed_fx,
+        embedded_fx_count=embedded_fx_total,
         is_dry_run=False,
         warnings=project.warnings,
         unsupported_features=project.unsupported_features,

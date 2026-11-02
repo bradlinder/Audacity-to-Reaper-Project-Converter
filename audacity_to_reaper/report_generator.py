@@ -18,15 +18,23 @@ logger = logging.getLogger(__name__)
 class ReportGenerator:
     """Generates comprehensive Markdown migration report."""
 
-    def __init__(self, project: AudacityProject, output_dir: Path, envelope_mode: str = "clip") -> None:
+    def __init__(
+        self,
+        project: AudacityProject,
+        output_dir: Path,
+        envelope_mode: str = "clip",
+        embed_fx: bool = True,
+    ) -> None:
         self.project = project
         self.output_dir = Path(output_dir).resolve()
         self.envelope_mode = envelope_mode
+        self.embed_fx = embed_fx
 
     def generate(self, extraction_summary: Dict[str, Any]) -> str:
         """Construct the Markdown report text."""
         p = self.project
         env_label = "Track Automation Lanes (VOLENV2)" if self.envelope_mode == "track" else "Take/Clip Envelopes (VOLENV)"
+        fx_label = "Enabled (Direct in .rpp <FXCHAIN>)" if self.embed_fx else "Disabled (ReaScript only)"
         lines: List[str] = [
             f"# Audacity to REAPER Migration Report: `{p.name}`",
             "",
@@ -43,6 +51,7 @@ class ReportGenerator:
             f"| **Project Sample Rate** | {int(p.sample_rate):,} Hz |",
             f"| **Audacity Version** | {p.audacity_version or '3.x'} |",
             f"| **Volume Envelope Mode** | {env_label} |",
+            f"| **Embedded Track FX Chains** | {fx_label} |",
             f"| **Total Tracks** | {len(p.tracks)} |",
             f"| **Total Audio Clips / Items** | {p.total_clips} |",
             f"| **Extracted Audio Files** | {extraction_summary.get('total_files', 0)} files ({extraction_summary.get('total_bytes', 0) / (1024*1024):.2f} MB) |",
@@ -92,6 +101,7 @@ class ReportGenerator:
                 )
 
         # Effects translation section
+        # Effects translation section
         effects_count = sum(len(t.effects) for t in p.tracks)
         lines.extend([
             "",
@@ -107,24 +117,35 @@ class ReportGenerator:
             lines.extend([
                 f"Detected **{effects_count}** realtime track effect(s).",
                 "",
-                "| Track | Audacity Effect ID | Target REAPER Plugin | Active | Mapped Parameters |",
-                "| :--- | :--- | :--- | :-: | :--- |",
+                "| Track | Audacity Effect ID | Target REAPER Plugin | Slot Status | State Blob Preserved | Mapped Parameters |",
+                "| :--- | :--- | :--- | :-: | :-: | :--- |",
             ])
             from .fx_mapper import FXMapper
             mapper = FXMapper(p)
             for tr in p.tracks:
                 for eff in tr.effects:
-                    target_plugin, _, params = mapper.classify_effect(eff)
-                    p_str = ", ".join(f"{k}={v}" for k, v in list(params.items())[:4]) or "Default"
+                    vst_entry = mapper.get_reaper_vst_entry(eff)
+                    p_str = ", ".join(f"{k}={v}" for k, v in list(vst_entry.parameters.items())[:4]) or "Default"
+                    has_blob = "Yes (Base64)" if eff.chunk_data else "None (Default State)"
+                    active_str = "Active" if eff.active else "Bypassed"
                     lines.append(
-                        f"| {tr.name} | `{eff.clean_name()}` | `{target_plugin}` | {'Yes' if eff.active else 'Bypassed'} | {p_str} |"
+                        f"| {tr.name} | `{eff.clean_name()}` | `{vst_entry.display_name}` | {active_str} | {has_blob} | {p_str} |"
                     )
 
-            lines.extend([
-                "",
-                "> [!TIP]",
-                "> To automatically instantiate and configure all plugin chains above, run the companion script `session_load_fx.lua` inside REAPER via **Actions -> Load ReaScript**.",
-            ])
+            if self.embed_fx:
+                lines.extend([
+                    "",
+                    "> [!NOTE]",
+                    "> **Direct `<FXCHAIN>` Embedding Active:** All plugin slots above have been directly serialized into REAPER `<FXCHAIN>` chunks inside the `.rpp` project file. When loading the project in REAPER, track effect chains will populate immediately on the arrange view without requiring external scripts.",
+                    "> ",
+                    "> **Fine-Tuning:** To apply translated Audacity numeric slider values to Cockos plugins (e.g. ReaComp threshold/ratio), run the optional companion ReaScript `session_load_fx.lua` via **Actions -> Load ReaScript**.",
+                ])
+            else:
+                lines.extend([
+                    "",
+                    "> [!TIP]",
+                    "> To instantiate and configure all plugin chains above, run the companion script `session_load_fx.lua` inside REAPER via **Actions -> Load ReaScript**.",
+                ])
 
         # Timeline Cues
         if p.markers or p.regions:
@@ -160,11 +181,10 @@ class ReportGenerator:
         lines.extend([
             "### Recommended REAPER Configuration Steps:",
             "",
-            "1. **Load Realtime FX Chains:**",
+            "1. **Realtime FX Chain Inspection:**",
             "   - Open REAPER and load the generated project `session.rpp`.",
-            "   - Open the **Actions List** (`?` or `Alt+A`).",
-            "   - Click **New Action -> Load ReaScript...** and select `session_load_fx.lua`.",
-            "   - Click **Run** to instantiate third-party VSTs and Cockos ReaPlugins with the translated parameters.",
+            "   - Track effect chains (Cockos ReaPlugins and 3rd-party VSTs) are already inserted on their respective tracks.",
+            "   - If desired, open the **Actions List** (`?` or `Alt+A`), click **Load ReaScript...**, select `session_load_fx.lua`, and click **Run** to fine-tune exact parameter sliders.",
             "",
             "2. **Sidechain Ducking Setup (if applicable):**",
             "   - In Audacity, ducking is typically baked destructive processing or set via Auto Duck.",

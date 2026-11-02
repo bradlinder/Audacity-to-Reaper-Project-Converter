@@ -69,6 +69,20 @@ Examples:
     )
 
     parser.add_argument(
+        "--embed-fx",
+        action="store_true",
+        default=True,
+        help="Embed native <FXCHAIN> chunks directly into REAPER track blocks in .rpp. Enabled by default.",
+    )
+
+    parser.add_argument(
+        "--no-embed-fx",
+        dest="embed_fx",
+        action="store_false",
+        help="Disable direct <FXCHAIN> embedding in .rpp tracks.",
+    )
+
+    parser.add_argument(
         "--envelope-mode",
         choices=["clip", "track"],
         default="clip",
@@ -123,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
             aup3_path=input_path,
             output_dir=args.output_dir,
             extract_fx_script=args.extract_fx_script,
+            embed_fx=args.embed_fx,
             envelope_mode=args.envelope_mode,
             dry_run=args.dry_run,
         )
@@ -137,6 +152,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  * Total Duration:    {result.total_duration_seconds:.2f} seconds")
             if result.fx_script_file:
                 print(f"  * FX Script Planned: {result.fx_script_file.name}")
+            if result.embed_fx:
+                print(f"  * Embedded FX Chains: Enabled ({result.embedded_fx_count} plugin(s))")
             print("-" * 65)
             print("No files written (--dry-run).")
             return 0
@@ -150,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  * Converted Tracks:   {result.total_tracks}")
         print(f"  * Converted Clips:    {result.total_clips}")
         print(f"  * Project Duration:   {result.total_duration_seconds:.2f} seconds")
+        if result.embed_fx:
+            print(f"  * Embedded FX:        {result.embedded_fx_count} plugin(s) serialized in <FXCHAIN>")
         print("=" * 65)
         print("Open the project in REAPER and check the migration report for details.")
         return 0

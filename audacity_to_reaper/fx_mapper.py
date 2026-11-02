@@ -8,12 +8,26 @@ Translates Audacity realtime effect chains to REAPER equivalents:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .models import AudacityProject, Effect, Track
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ReaperFXEntry:
+    """Represents a formatted plugin entry for REAPER <FXCHAIN> embedding."""
+    tag: str  # "VST" or "VST3"
+    display_name: str  # e.g. "VST: ReaComp (Cockos)" or "VST3: FabFilter Pro-Q 3"
+    dll_name: str  # e.g. "reacomp.dll" or "FabFilter Pro-Q 3.vst3"
+    plugin_id: int  # 1919247213 for ReaComp, 0 for generic VST/VST3
+    chunk_data: Optional[str] = None  # Base64 plugin state blob
+    active: bool = True
+    mapped_type: str = "custom"
+    parameters: Dict[str, Any] = field(default_factory=dict)
 
 
 def safe_float(val: Any, default: float = 0.0) -> float:
@@ -24,7 +38,7 @@ def safe_float(val: Any, default: float = 0.0) -> float:
 
 
 class FXMapper:
-    """Maps Audacity effect chains to REAPER ReaScript Lua code."""
+    """Maps Audacity effect chains to REAPER ReaScript Lua code and native <FXCHAIN> chunks."""
 
     def __init__(self, project: AudacityProject) -> None:
         self.project = project
@@ -121,11 +135,19 @@ class FXMapper:
                 },
             )
 
-        # 5. Third-party VST3 or VST
+        # 5. Audacity Limiter -> ReaLimit (Cockos)
+        elif "limiter" in eid:
+            thresh_db = safe_float(effect.parameters.get("Threshold", "-1.0"))
+            return (
+                "VST:ReaLimit (Cockos)",
+                "realimit",
+                {"Threshold": thresh_db},
+            )
+
+        # 6. Third-party VST3 or VST
         else:
             plugin_ident = effect.effect_id
             if not (plugin_ident.startswith("VST3:") or plugin_ident.startswith("VST:")):
-                # Format appropriately
                 if "vst3" in eid:
                     clean = effect.clean_name()
                     plugin_ident = f"VST3:{clean}"
@@ -139,6 +161,90 @@ class FXMapper:
                 raw_params[k] = val_num if val_num is not None else v
 
             return (plugin_ident, "third_party", raw_params)
+
+    def get_reaper_vst_entry(self, effect: Effect) -> ReaperFXEntry:
+        """Derive standard REAPER <VST / <VST3 metadata for direct <FXCHAIN> embedding."""
+        target_name, ptype, params = self.classify_effect(effect)
+        eid = effect.effect_id.lower()
+
+        if ptype == "reacomp":
+            return ReaperFXEntry(
+                tag="VST",
+                display_name="VST: ReaComp (Cockos)",
+                dll_name="reacomp.dll",
+                plugin_id=1919247213,
+                chunk_data=effect.chunk_data,
+                active=effect.active,
+                mapped_type="reacomp",
+                parameters=params,
+            )
+        elif ptype == "reaeq":
+            return ReaperFXEntry(
+                tag="VST",
+                display_name="VST: ReaEQ (Cockos)",
+                dll_name="reaeq.dll",
+                plugin_id=1919247729,
+                chunk_data=effect.chunk_data,
+                active=effect.active,
+                mapped_type="reaeq",
+                parameters=params,
+            )
+        elif ptype == "readelay":
+            return ReaperFXEntry(
+                tag="VST",
+                display_name="VST: ReaDelay (Cockos)",
+                dll_name="readelay.dll",
+                plugin_id=1919247212,
+                chunk_data=effect.chunk_data,
+                active=effect.active,
+                mapped_type="readelay",
+                parameters=params,
+            )
+        elif ptype == "reaverbate":
+            return ReaperFXEntry(
+                tag="VST",
+                display_name="VST: ReaVerbate (Cockos)",
+                dll_name="reaverbate.dll",
+                plugin_id=1919251058,
+                chunk_data=effect.chunk_data,
+                active=effect.active,
+                mapped_type="reaverbate",
+                parameters=params,
+            )
+        elif ptype == "realimit":
+            return ReaperFXEntry(
+                tag="VST",
+                display_name="VST: ReaLimit (Cockos)",
+                dll_name="realimit.dll",
+                plugin_id=1919251053,
+                chunk_data=effect.chunk_data,
+                active=effect.active,
+                mapped_type="realimit",
+                parameters=params,
+            )
+        else:
+            clean = effect.clean_name()
+            if clean.startswith("VST3:"):
+                clean = clean[5:].strip()
+            elif clean.startswith("VST:"):
+                clean = clean[4:].strip()
+
+            is_vst3 = ("vst3" in eid) or target_name.startswith("VST3:")
+            tag = "VST3" if is_vst3 else "VST"
+            display_name = f"{tag}: {clean}"
+            dll_ext = ".vst3" if is_vst3 else ".dll"
+            dll_name = f"{clean}{dll_ext}"
+
+            return ReaperFXEntry(
+                tag=tag,
+                display_name=display_name,
+                dll_name=dll_name,
+                plugin_id=0,
+                chunk_data=effect.chunk_data,
+                active=effect.active,
+                mapped_type="vst3" if is_vst3 else "vst",
+                parameters=params,
+            )
 
     def generate_lua_script(self, output_path: Path) -> str:
         """Generate REAPER ReaScript Lua script."""
@@ -274,7 +380,10 @@ class FXMapper:
                     damp = params.get("Damping", 50.0)
                     lines.append(f"            -- Set ReaVerbate parameters")
                     lines.append(f"            set_fx_param(track, fx_idx, 'Room size', {room})")
-                    lines.append(f"            set_fx_param(track, fx_idx, 'Dampening', {damp})")
+                elif ptype == "realimit":
+                    thresh = params.get("Threshold", -1.0)
+                    lines.append(f"            -- Set ReaLimit parameters")
+                    lines.append(f"            set_fx_param(track, fx_idx, 'Threshold', {thresh})")
 
                 else:
                     # Third-party VST3 or generic parameter assignment

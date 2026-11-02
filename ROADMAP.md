@@ -28,7 +28,7 @@ flowchart LR
 ---
 
 ## Phase 2: Stereo, Envelopes & Session Fidelity
-*Status: Planned*
+*Status: Completed*
 
 - [x] **2.1 Full Stereo Channel Modes:**
   - Handle interleaved 2-channel stereo tracks (extracting true 2-channel WAVs or splitting cleanly based on track definition).
@@ -44,8 +44,11 @@ flowchart LR
 - [x] **2.5 Clip Gain Slider & Pitch Shift Preservation:**
   - Parse Audacity 3.2+ clip gain attributes (per-clip dB trim) from `<waveclip>` and map to REAPER item `VOLPAN`.
   - Parse Audacity 3.1+ non-destructive clip pitch attributes (semitones/cents) and map to REAPER item `PITCH` parameters without destructive re-rendering.
-- [ ] **2.6 Direct REAPER `<FXCHAIN>` Embedding for Stock FX:**
-  - Embed native `<FXCHAIN>` chunks directly into REAPER track blocks in `.rpp` for recognized stock effects (e.g. ReaEQ, ReaComp), removing the need to execute external Lua scripts for standard plugin chains.
+- [x] **2.6 Direct REAPER `<FXCHAIN>` Embedding for Stock FX & VST/VST3 Plugins:**
+  - Directly serialize standard REAPER `<FXCHAIN>` and `<MASTERFXCHAIN>` chunks into `.rpp` track blocks.
+  - Automatically instantiate Cockos Rea-family stock equivalents (ReaComp, ReaEQ, ReaDelay, ReaVerbate, ReaLimit) and third-party VST/VST3 plugins in their respective track insert slots.
+  - Preserve bypass flags (`BYPASS 0 0 0` vs `BYPASS 1 0 0`), unique `FXID` GUIDs, floating window geometry, and base64 binary state chunk blobs when present in Audacity project data.
+  - Provide `--embed-fx` / `--no-embed-fx` CLI and GUI toggles while retaining optional companion ReaScript (`session_load_fx.lua`) for manual parameter slider fine-tuning.
 
 ---
 

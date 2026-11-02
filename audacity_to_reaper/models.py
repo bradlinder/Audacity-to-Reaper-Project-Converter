@@ -32,6 +32,7 @@ class Effect:
     version: str = ""
     active: bool = True
     parameters: Dict[str, str] = field(default_factory=dict)
+    chunk_data: Optional[str] = None  # Base64 string or binary preset chunk data
 
     def clean_name(self) -> str:
         """Derive a human-readable display name for this plugin."""
