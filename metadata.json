@@ -1,0 +1,8 @@
+{
+  "name": "Audacity to Reaper Converter",
+  "description": "Convert Audacity projects and label tracks into REAPER project files (.rpp) seamlessly.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
