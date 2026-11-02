@@ -7,6 +7,7 @@ into clean, standard REAPER plain-text project syntax.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import uuid
 from pathlib import Path
@@ -34,7 +35,7 @@ def get_reaper_color(clip: Clip) -> Optional[int]:
     rgb = None
     if clip.color_rgb is not None:
         rgb = clip.color_rgb
-    elif clip.color_index is not None:
+    elif clip.color_index is not None and clip.color_index >= 0:
         idx = clip.color_index % len(AUDACITY_CLIP_PALETTE)
         rgb = AUDACITY_CLIP_PALETTE[idx]
 
@@ -76,12 +77,15 @@ class RPPGenerator:
         lines.append("  GROUPOVERRIDE 0 0 0")
         lines.append("  AUTOXFADE 1")
         lines.append(f"  SAMPLERATE {int(self.project.sample_rate)} 0 0")
-        lines.append(f"  TEMPO {self.project.tempo:.6f} {self.project.time_sig_numerator} {self.project.time_sig_denominator}")
+        tempo = self.project.tempo if self.project.tempo > 0 else 120.0
+        ts_num = self.project.time_sig_numerator if self.project.time_sig_numerator > 0 else 4
+        ts_denom = self.project.time_sig_denominator if self.project.time_sig_denominator > 0 else 4
+        lines.append(f"  TEMPO {tempo:.6f} {ts_num} {ts_denom}")
         lines.append('  RECORD_PATH "" ""')
 
         # Project Tempo Envelope
         lines.append("  <TEMPOENV")
-        lines.append(f"    PT 0.000000 {self.project.tempo:.6f} 1 {self.project.time_sig_numerator} {self.project.time_sig_denominator} 0")
+        lines.append(f"    PT 0.000000 {tempo:.6f} 1 {ts_num} {ts_denom} 0")
         lines.append("  >")
 
         # Project Summary Notes Chunk
@@ -181,6 +185,7 @@ class RPPGenerator:
             effective_pan = 1.0  # 100% Right
         elif track.channel == 0 and track.linked and abs(track.pan) < 0.001:
             effective_pan = -1.0  # 100% Left
+        effective_pan = max(-1.0, min(1.0, effective_pan))
 
         lines: List[str] = [
             f"  <TRACK {guid}",
@@ -198,14 +203,25 @@ class RPPGenerator:
         # Collect track volume automation points if in track envelope mode
         track_envelope_points: List[Tuple[float, float]] = []
         if self.envelope_mode == "track":
+            has_clip_envelopes = False
             for clip in track.clips:
                 if clip.envelope_points:
+                    has_clip_envelopes = True
                     for item_t, val in clip.envelope_points:
                         abs_t = clip.timeline_offset + item_t
                         track_envelope_points.append((abs_t, val))
 
-            if track_envelope_points:
+            if has_clip_envelopes:
+                # Add boundary anchor points for clips without envelopes so their unity gain is preserved
+                for clip in track.clips:
+                    if not clip.envelope_points and clip.timeline_duration > 0:
+                        track_envelope_points.append((clip.timeline_offset, 1.0))
+                        track_envelope_points.append((clip.timeline_offset + clip.timeline_duration, 1.0))
+
                 track_envelope_points.sort(key=lambda p: p[0])
+                if track_envelope_points[0][0] > 0.001:
+                    track_envelope_points.insert(0, (0.0, 1.0))
+
                 dedup_pts: List[Tuple[float, float]] = []
                 for pt in track_envelope_points:
                     if dedup_pts and abs(dedup_pts[-1][0] - pt[0]) < 0.001:
@@ -250,7 +266,6 @@ class RPPGenerator:
             "      SHOW 0",
             "      LASTSEL 0",
             "      DOCKED 0",
-            "      BYPASS 0 0 0",
         ]
 
         from .fx_mapper import FXMapper
@@ -259,9 +274,11 @@ class RPPGenerator:
         for eff in effects:
             entry = mapper.get_reaper_vst_entry(eff)
             bypass_flag = 0 if eff.active else 1
+            clean_display_name = entry.display_name.replace('"', "'")
+            clean_dll_name = entry.dll_name.replace('"', "'")
             lines.append(f"      BYPASS {bypass_flag} 0 0")
             lines.append(
-                f'      <{entry.tag} "{entry.display_name}" "{entry.dll_name}" 0 "" {entry.plugin_id} ""'
+                f'      <{entry.tag} "{clean_display_name}" "{clean_dll_name}" 0 "" {entry.plugin_id} ""'
             )
 
             # Embed base64 binary state chunk if present
@@ -291,7 +308,6 @@ class RPPGenerator:
             "    SHOW 0",
             "    LASTSEL 0",
             "    DOCKED 0",
-            "    BYPASS 0 0 0",
         ]
 
         from .fx_mapper import FXMapper
@@ -300,9 +316,11 @@ class RPPGenerator:
         for eff in self.project.master_effects:
             entry = mapper.get_reaper_vst_entry(eff)
             bypass_flag = 0 if eff.active else 1
+            clean_display_name = entry.display_name.replace('"', "'")
+            clean_dll_name = entry.dll_name.replace('"', "'")
             lines.append(f"    BYPASS {bypass_flag} 0 0")
             lines.append(
-                f'    <{entry.tag} "{entry.display_name}" "{entry.dll_name}" 0 "" {entry.plugin_id} ""'
+                f'    <{entry.tag} "{clean_display_name}" "{clean_dll_name}" 0 "" {entry.plugin_id} ""'
             )
 
             if entry.chunk_data:
@@ -366,8 +384,11 @@ class RPPGenerator:
         if color_int is not None:
             lines.append(f"      SETCOLOR {color_int}")
 
+        clip_gain = clip.gain if clip.gain is not None and not math.isnan(clip.gain) else 1.0
+        clip_gain = max(0.0, clip_gain)
+
         lines.extend([
-            f"      VOLPAN {clip.gain:.6f} 0 1 -1",
+            f"      VOLPAN {clip_gain:.6f} 0 1 -1",
             f"      SOFFS {clip.trim_left:.6f}",
             f"      PLAYRATE {clip.play_rate:.6f} 1 0 -1 0 0.0025",
         ])

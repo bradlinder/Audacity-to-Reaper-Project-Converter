@@ -387,6 +387,66 @@ class TestRPPGenerator(unittest.TestCase):
             self.assertIn("<MASTERFXCHAIN", text)
             self.assertIn('<VST "VST: ReaLimit (Cockos)" "realimit.dll" 0 "" 1919251053 ""', text)
 
+    def test_fxchain_bypass_cleanliness(self):
+        """Verify FXCHAIN has no double BYPASS statements at the top."""
+        project = AudacityProject(project_path=Path("demo.aup3"), name="BypassTest", sample_rate=44100)
+        track = Track(track_id=1, name="Track")
+        track.effects.append(Effect(effect_id="builtin:compressor", active=True))
+        project.tracks.append(track)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_rpp = Path(tmp_dir) / "bypass_test.rpp"
+            gen = RPPGenerator(project, out_rpp, embed_fx=True)
+            text = gen.generate()
+
+            # Ensure there are not two consecutive BYPASS lines
+            self.assertNotIn("BYPASS 0 0 0\n      BYPASS 0 0 0", text)
+            self.assertNotIn("BYPASS 0 0 0\n    BYPASS 0 0 0", text)
+            self.assertIn("BYPASS 0 0 0\n      <VST", text)
+
+    def test_clip_gain_safety_and_clamping(self):
+        """Verify negative or NaN clip gain is safely clamped to 1.0 or non-negative in VOLPAN."""
+        project = AudacityProject(project_path=Path("demo.aup3"), name="GainSafetyTest", sample_rate=44100)
+        track = Track(track_id=1, name="Safety Track")
+        clip = Clip(
+            name="SafeClip",
+            clip_index=0,
+            gain=-0.5,
+            sample_rate=44100,
+            num_samples=44100,
+        )
+        track.clips.append(clip)
+        project.tracks.append(track)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_rpp = Path(tmp_dir) / "gain_safety.rpp"
+            gen = RPPGenerator(project, out_rpp)
+            text = gen.generate()
+
+            # Gain clamped to >= 0
+            self.assertIn("VOLPAN 0.000000 0 1 -1", text)
+
+    def test_uncolored_clip_skips_setcolor(self):
+        """Verify negative color index (Audacity default uncolored) does not emit SETCOLOR."""
+        project = AudacityProject(project_path=Path("demo.aup3"), name="ColorSafetyTest", sample_rate=44100)
+        track = Track(track_id=1, name="Color Track")
+        clip = Clip(
+            name="DefaultColorClip",
+            clip_index=0,
+            color_index=-1,
+            sample_rate=44100,
+            num_samples=44100,
+        )
+        track.clips.append(clip)
+        project.tracks.append(track)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_rpp = Path(tmp_dir) / "color_safety.rpp"
+            gen = RPPGenerator(project, out_rpp)
+            text = gen.generate()
+
+            self.assertNotIn("SETCOLOR", text)
+
 
 if __name__ == "__main__":
     unittest.main()

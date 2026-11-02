@@ -286,15 +286,18 @@ class AudioExtractor:
         sample_width = 4 if sample_format in (262159, 2) else (3 if sample_format in (262145, 1, 24) else 2)
 
         # Handle 2-channel stereo clips
-        if clip.channels == 2 and clip.right_blocks:
-            right_bytes, _ = self._fetch_stitched_blocks(clip.right_blocks, sample_format, conn)
+        if clip.channels == 2:
+            if clip.right_blocks:
+                right_bytes, _ = self._fetch_stitched_blocks(clip.right_blocks, sample_format, conn)
+            else:
+                right_bytes = left_bytes
             raw_audio = interleave_stereo_channels(left_bytes, right_bytes, sample_width)
             wav_channels = 2
             total_samples = len(raw_audio) // (sample_width * 2)
         else:
             raw_audio = left_bytes
-            wav_channels = 2 if clip.channels == 2 else 1
-            total_samples = len(raw_audio) // (sample_width * wav_channels)
+            wav_channels = 1
+            total_samples = len(raw_audio) // sample_width
 
         if not raw_audio:
             return None, 0.0, 0
