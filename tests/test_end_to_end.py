@@ -1,4 +1,4 @@
-﻿"""End-to-end integration tests for aup3-to-reaper."""
+"""End-to-end integration tests for aup3-to-reaper."""
 
 import sqlite3
 import struct
@@ -26,6 +26,10 @@ def create_sample_aup3(db_path: Path) -> None:
           <simpleblockfile blockid="102" len="24000"/>
         </waveblock>
       </sequence>
+      <envelope numpoints="2">
+        <controlpoint t="0.100000" val="0.700000"/>
+        <controlpoint t="0.500000" val="0.300000"/>
+      </envelope>
     </waveclip>
     <effects active="1">
       <effect id="Audacity:Audacity:builtin:compressor:Compressor" active="1" version="1.0">
@@ -137,6 +141,10 @@ class TestEndToEndConversion(unittest.TestCase):
                 self.assertIn('MARKER 1 10.000000 "" 1', rpp_text)
                 self.assertIn("POSITION 1.600000", rpp_text)
                 self.assertIn("SOFFS 0.100000", rpp_text)
+                # Verify take-level envelope is generated in default 'clip' mode
+                self.assertIn("<VOLENV", rpp_text)
+                self.assertNotIn("<VOLENV2", rpp_text)
+                self.assertIn("|Volume Envelope Mode: Take/Clip Envelopes (VOLENV)", rpp_text)
 
             # Check ReaScript Lua
             with open(result.fx_script_file, "r", encoding="utf-8") as f:
@@ -155,6 +163,56 @@ class TestEndToEndConversion(unittest.TestCase):
                 self.assertIn("Host Mic", report_text)
                 self.assertIn("Guest Mic", report_text)
                 self.assertIn("ReaComp (Cockos)", report_text)
+                self.assertIn("Volume Envelope Mode", report_text)
+                self.assertIn("Take/Clip Envelopes (VOLENV)", report_text)
+
+    def test_track_envelope_mode_conversion(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            aup3_file = tmp_path / "Podcast_Ep1.aup3"
+            out_dir = tmp_path / "output_track_env"
+
+            create_sample_aup3(aup3_file)
+
+            result = convert_audacity_to_reaper(
+                aup3_path=aup3_file,
+                output_dir=out_dir,
+                envelope_mode="track",
+                extract_fx_script=False,
+                dry_run=False,
+            )
+
+            self.assertTrue(result.success)
+            self.assertEqual(result.envelope_mode, "track")
+            self.assertTrue(result.rpp_file.exists())
+
+            with open(result.rpp_file, "r", encoding="utf-8") as f:
+                rpp_text = f.read()
+                # Track automation lane should exist
+                self.assertIn("<VOLENV2", rpp_text)
+                # Take-level envelope should not be present
+                self.assertNotIn("<VOLENV\n", rpp_text)
+                self.assertIn("|Volume Envelope Mode: Track Automation Lanes (VOLENV2)", rpp_text)
+
+            with open(result.report_file, "r", encoding="utf-8") as f:
+                report_text = f.read()
+                self.assertIn("Track Automation Lanes", report_text)
+
+    def test_cli_envelope_mode_argument(self):
+        from audacity_to_reaper.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            aup3_file = tmp_path / "Podcast_Ep1.aup3"
+            create_sample_aup3(aup3_file)
+
+            # Test --envelope-mode track in dry-run mode
+            exit_code = main([str(aup3_file), "--envelope-mode", "track", "--dry-run"])
+            self.assertEqual(exit_code, 0)
+
+            # Test --envelope-mode clip in dry-run mode
+            exit_code = main([str(aup3_file), "--envelope-mode", "clip", "--dry-run"])
+            self.assertEqual(exit_code, 0)
 
     def test_dry_run_mode(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

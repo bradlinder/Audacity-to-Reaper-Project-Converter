@@ -18,13 +18,15 @@ logger = logging.getLogger(__name__)
 class ReportGenerator:
     """Generates comprehensive Markdown migration report."""
 
-    def __init__(self, project: AudacityProject, output_dir: Path) -> None:
+    def __init__(self, project: AudacityProject, output_dir: Path, envelope_mode: str = "clip") -> None:
         self.project = project
         self.output_dir = Path(output_dir).resolve()
+        self.envelope_mode = envelope_mode
 
     def generate(self, extraction_summary: Dict[str, Any]) -> str:
         """Construct the Markdown report text."""
         p = self.project
+        env_label = "Track Automation Lanes (VOLENV2)" if self.envelope_mode == "track" else "Take/Clip Envelopes (VOLENV)"
         lines: List[str] = [
             f"# Audacity to REAPER Migration Report: `{p.name}`",
             "",
@@ -40,6 +42,7 @@ class ReportGenerator:
             f"| **Output Directory** | `{self.output_dir}` |",
             f"| **Project Sample Rate** | {int(p.sample_rate):,} Hz |",
             f"| **Audacity Version** | {p.audacity_version or '3.x'} |",
+            f"| **Volume Envelope Mode** | {env_label} |",
             f"| **Total Tracks** | {len(p.tracks)} |",
             f"| **Total Audio Clips / Items** | {p.total_clips} |",
             f"| **Extracted Audio Files** | {extraction_summary.get('total_files', 0)} files ({extraction_summary.get('total_bytes', 0) / (1024*1024):.2f} MB) |",

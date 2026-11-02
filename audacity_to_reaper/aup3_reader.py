@@ -313,6 +313,60 @@ class AUP3Reader:
             except ValueError:
                 pass
 
+        # Project Tempo (BPM) and Time Signature
+        for key in ["tempo", "bpm", "beatsperminute", "projectbpm"]:
+            if key in root.attrib:
+                try:
+                    proj.tempo = float(root.attrib[key])
+                    break
+                except ValueError:
+                    pass
+
+        for key in ["timesig", "timeSignature", "time_signature", "meter"]:
+            if key in root.attrib:
+                val = root.attrib[key].strip()
+                if "/" in val:
+                    parts = val.split("/")
+                    try:
+                        proj.time_sig_numerator = int(parts[0])
+                        proj.time_sig_denominator = int(parts[1])
+                    except ValueError:
+                        pass
+                break
+
+        # Check child tags for tempo, time signature, or snap settings
+        for child in root:
+            tag = strip_ns(child.tag)
+            if tag in ("timesignature", "meter"):
+                num = child.attrib.get("numerator") or child.attrib.get("num")
+                denom = child.attrib.get("denominator") or child.attrib.get("denom")
+                if num and denom:
+                    try:
+                        proj.time_sig_numerator = int(num)
+                        proj.time_sig_denominator = int(denom)
+                    except ValueError:
+                        pass
+                bpm_val = child.attrib.get("bpm") or child.attrib.get("tempo")
+                if bpm_val:
+                    try:
+                        proj.tempo = float(bpm_val)
+                    except ValueError:
+                        pass
+            elif tag in ("tempo", "bpm"):
+                bpm_val = child.attrib.get("value") or child.attrib.get("bpm") or child.attrib.get("tempo")
+                if bpm_val:
+                    try:
+                        proj.tempo = float(bpm_val)
+                    except ValueError:
+                        pass
+            elif tag == "snapto":
+                bpm_val = child.attrib.get("tempo") or child.attrib.get("bpm")
+                if bpm_val:
+                    try:
+                        proj.tempo = float(bpm_val)
+                    except ValueError:
+                        pass
+
         # Check for unsupported project-level features
         for child in root:
             tag = strip_ns(child.tag)
@@ -342,10 +396,55 @@ class AUP3Reader:
                         if eff:
                             proj.master_effects.append(eff)
 
+        # Establish dual-mono linked stereo pairs
+        self._link_stereo_pairs(proj)
+
+    def _link_stereo_pairs(self, proj: AudacityProject) -> None:
+        """Establish stereo link pairs between consecutive tracks:
+        Track i (channel=0, linked=True) and Track i+1 (channel=1).
+        
+        Assigns stereo_pair_id to tracks and synchronized group_id to items
+        so that moving or editing in REAPER operates on both channels in sync.
+        """
+        pair_counter = 1
+        i = 0
+        while i < len(proj.tracks) - 1:
+            t_left = proj.tracks[i]
+            t_right = proj.tracks[i + 1]
+            if t_left.channel == 0 and t_left.linked and t_right.channel == 1:
+                t_left.stereo_pair_id = pair_counter
+                t_right.stereo_pair_id = pair_counter
+
+                # Group corresponding clips so REAPER links them
+                num_clips = min(len(t_left.clips), len(t_right.clips))
+                for c_idx in range(num_clips):
+                    group_val = pair_counter * 1000 + c_idx + 1
+                    t_left.clips[c_idx].group_id = group_val
+                    t_right.clips[c_idx].group_id = group_val
+
+                pair_counter += 1
+                i += 2
+            else:
+                i += 1
+
     def _parse_wavetrack(self, elem: ET.Element, track_idx: int, default_rate: float) -> Track:
         """Parse a <wavetrack> element into a Track model."""
         name = elem.attrib.get("name", f"Track {track_idx + 1}")
-        channel = int(elem.attrib.get("channel", "0"))
+        channel_raw = elem.attrib.get("channel", "0")
+        try:
+            channel = int(channel_raw)
+        except ValueError:
+            if channel_raw.lower() in ("stereo", "2"):
+                channel = 2
+            elif channel_raw.lower() in ("right", "1"):
+                channel = 1
+            else:
+                channel = 0
+
+        # Check explicit channels attribute: e.g. channels="2"
+        if elem.attrib.get("channels") == "2":
+            channel = 2
+
         linked_raw = elem.attrib.get("linked", "0")
         try:
             linked = int(linked_raw) > 0
@@ -385,7 +484,7 @@ class AUP3Reader:
         for child in elem:
             ctag = strip_ns(child.tag)
             if ctag == "waveclip":
-                clip = self._parse_waveclip(child, name, clip_idx, rate)
+                clip = self._parse_waveclip(child, name, clip_idx, rate, track_channel=channel)
                 track.clips.append(clip)
                 clip_idx += 1
             elif ctag == "effects":
@@ -397,7 +496,14 @@ class AUP3Reader:
 
         return track
 
-    def _parse_waveclip(self, elem: ET.Element, track_name: str, clip_idx: int, track_rate: float) -> Clip:
+    def _parse_waveclip(
+        self,
+        elem: ET.Element,
+        track_name: str,
+        clip_idx: int,
+        track_rate: float,
+        track_channel: int = 0,
+    ) -> Clip:
         """Parse a <waveclip> element into a Clip model."""
         try:
             offset = float(elem.attrib.get("offset", "0.0"))
@@ -432,7 +538,67 @@ class AUP3Reader:
                 except ValueError:
                     pass
 
+        # Per-clip gain slider (Audacity 3.2+)
+        clip_gain = 1.0
+        for key in ["gain", "clipGain", "clip_gain", "volume"]:
+            if key in elem.attrib:
+                try:
+                    clip_gain = float(elem.attrib[key])
+                    break
+                except ValueError:
+                    pass
+        for key in ["gain_db", "clipGainDb", "gainDb"]:
+            if key in elem.attrib:
+                try:
+                    clip_gain = 10.0 ** (float(elem.attrib[key]) / 20.0)
+                    break
+                except ValueError:
+                    pass
+
+        # Non-destructive clip pitch shift in semitones (Audacity 3.1+)
+        pitch_semitones = 0.0
+        for key in ["pitch", "clipPitch", "clip_pitch", "pitchShift", "pitch_shift", "semitones"]:
+            if key in elem.attrib:
+                try:
+                    pitch_semitones = float(elem.attrib[key])
+                    break
+                except ValueError:
+                    pass
+        if abs(pitch_semitones) < 1e-5:
+            for key in ["cents", "clipCents", "clip_cents"]:
+                if key in elem.attrib:
+                    try:
+                        pitch_semitones = float(elem.attrib[key]) / 100.0
+                        break
+                    except ValueError:
+                        pass
+
+        # Clip color index (Audacity 3.2+ color coding)
+        color_index = None
+        color_rgb = None
+        for key in ["colorindex", "colorIndex", "color_index", "color"]:
+            if key in elem.attrib:
+                val = elem.attrib[key].strip()
+                try:
+                    color_index = int(val)
+                    break
+                except ValueError:
+                    if val.startswith("#") and len(val) == 7:
+                        try:
+                            r = int(val[1:3], 16)
+                            g = int(val[3:5], 16)
+                            b = int(val[5:7], 16)
+                            color_rgb = (r, g, b)
+                            break
+                        except ValueError:
+                            pass
+
         clip_name = elem.attrib.get("name", f"{track_name}_Clip{clip_idx + 1}")
+
+        # Determine clip channel mode (1: Mono, 2: Stereo)
+        clip_channels = 2 if track_channel == 2 else 1
+        if elem.attrib.get("channels") == "2" or elem.attrib.get("channel") in ("2", "stereo", "Stereo"):
+            clip_channels = 2
 
         clip = Clip(
             name=clip_name,
@@ -442,35 +608,76 @@ class AUP3Reader:
             trim_right=trim_right,
             stretch_ratio=stretch_ratio,
             sample_rate=track_rate,
+            channels=clip_channels,
+            gain=clip_gain,
+            pitch_semitones=pitch_semitones,
+            color_index=color_index,
+            color_rgb=color_rgb,
         )
 
-        # Parse <sequence>
+        # Parse <sequence> and <envelope>
+        sequences: List[Tuple[ET.Element, int]] = []
         for child in elem:
             ctag = strip_ns(child.tag)
             if ctag == "sequence":
-                try:
-                    clip.num_samples = int(child.attrib.get("numsamples", "0"))
-                except ValueError:
-                    clip.num_samples = 0
-
-                try:
-                    clip.sample_format = int(child.attrib.get("sampleformat", "262159"))
-                except ValueError:
-                    clip.sample_format = 262159
-
-                # Waveblocks inside sequence
-                for block_elem in child:
-                    if strip_ns(block_elem.tag) == "waveblock":
-                        block = self._parse_waveblock(block_elem, clip.sample_format)
-                        if block:
-                            clip.blocks.append(block)
+                seq_ch = 0
+                ch_attr = child.attrib.get("channel")
+                if ch_attr is not None:
+                    try:
+                        seq_ch = int(ch_attr)
+                    except ValueError:
+                        seq_ch = len(sequences)
+                else:
+                    seq_ch = len(sequences)
+                sequences.append((child, seq_ch))
 
             elif ctag == "envelope":
                 # Parse volume envelope adjustments and fades
                 self._parse_envelope(child, clip)
 
+        if len(sequences) >= 2:
+            clip.channels = 2
+            for seq_elem, seq_ch in sequences:
+                try:
+                    seq_num_samples = int(seq_elem.attrib.get("numsamples", "0"))
+                    if seq_num_samples > clip.num_samples:
+                        clip.num_samples = seq_num_samples
+                except ValueError:
+                    pass
+
+                try:
+                    clip.sample_format = int(seq_elem.attrib.get("sampleformat", "262159"))
+                except ValueError:
+                    pass
+
+                target_blocks = clip.right_blocks if seq_ch == 1 else clip.blocks
+                for block_elem in seq_elem:
+                    if strip_ns(block_elem.tag) == "waveblock":
+                        block = self._parse_waveblock(block_elem, clip.sample_format)
+                        if block:
+                            target_blocks.append(block)
+
+        elif len(sequences) == 1:
+            seq_elem, _ = sequences[0]
+            try:
+                clip.num_samples = int(seq_elem.attrib.get("numsamples", "0"))
+            except ValueError:
+                clip.num_samples = 0
+
+            try:
+                clip.sample_format = int(seq_elem.attrib.get("sampleformat", "262159"))
+            except ValueError:
+                clip.sample_format = 262159
+
+            for block_elem in seq_elem:
+                if strip_ns(block_elem.tag) == "waveblock":
+                    block = self._parse_waveblock(block_elem, clip.sample_format)
+                    if block:
+                        clip.blocks.append(block)
+
         # Sort blocks by their start sample position
         clip.blocks.sort(key=lambda b: b.start)
+        clip.right_blocks.sort(key=lambda b: b.start)
         return clip
 
     def _parse_waveblock(self, elem: ET.Element, default_format: int) -> Optional[SampleBlock]:
@@ -517,10 +724,13 @@ class AUP3Reader:
         """Parse Audacity envelope control points into REAPER item volume envelope points and edge fades."""
         raw_pts: List[Tuple[float, float]] = []
         for pt in env_elem:
-            if strip_ns(pt.tag) == "controlpoint":
+            tag = strip_ns(pt.tag).lower()
+            if tag in ("controlpoint", "point"):
                 try:
-                    t = float(pt.attrib.get("t", "0.0"))
-                    val = float(pt.attrib.get("val", "1.0"))
+                    t_str = pt.attrib.get("t") or pt.attrib.get("time", "0.0")
+                    v_str = pt.attrib.get("val") or pt.attrib.get("value") or pt.attrib.get("v", "1.0")
+                    t = float(t_str)
+                    val = float(v_str)
                     raw_pts.append((t, val))
                 except ValueError:
                     continue

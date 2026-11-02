@@ -47,6 +47,7 @@ def launch_qt_gui() -> int:
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
+        QComboBox,
         QFileDialog,
         QFrame,
         QGridLayout,
@@ -80,12 +81,14 @@ def launch_qt_gui() -> int:
             output_dir: Optional[Path],
             extract_fx: bool,
             dry_run: bool,
+            envelope_mode: str = "clip",
         ) -> None:
             super().__init__()
             self.aup3_path = aup3_path
             self.output_dir = output_dir
             self.extract_fx = extract_fx
             self.dry_run = dry_run
+            self.envelope_mode = envelope_mode
 
         def run(self) -> None:
             try:
@@ -93,6 +96,7 @@ def launch_qt_gui() -> int:
                     aup3_path=self.aup3_path,
                     output_dir=self.output_dir,
                     extract_fx_script=self.extract_fx,
+                    envelope_mode=self.envelope_mode,
                     dry_run=self.dry_run,
                     progress_callback=self.progress_signal.emit,
                 )
@@ -178,9 +182,17 @@ def launch_qt_gui() -> int:
             self.fx_checkbox.setToolTip("Creates a REAPER Lua script to restore ReaComp, ReaEQ, and VST/VST3 settings.")
             options_layout.addWidget(self.fx_checkbox)
 
-            self.dry_run_checkbox = QCheckBox("Dry Run (Inspect only, do not write files)")
+            self.dry_run_checkbox = QCheckBox("Dry Run (Inspect only)")
             self.dry_run_checkbox.setToolTip("Parses the project database and previews summary without extracting audio.")
             options_layout.addWidget(self.dry_run_checkbox)
+
+            options_layout.addWidget(QLabel("Envelope Target:"))
+            self.env_combo = QComboBox()
+            self.env_combo.addItem("Take / Clip Envelope (Default)", "clip")
+            self.env_combo.addItem("Track Automation Lane", "track")
+            self.env_combo.setToolTip("Convert Audacity volume envelope points as item take envelopes or track automation lanes.")
+            options_layout.addWidget(self.env_combo)
+
             options_layout.addStretch()
             main_layout.addLayout(options_layout)
 
@@ -291,6 +303,7 @@ def launch_qt_gui() -> int:
 
             extract_fx = self.fx_checkbox.isChecked()
             dry_run = self.dry_run_checkbox.isChecked()
+            envelope_mode = self.env_combo.currentData() or "clip"
 
             # Prepare UI
             self.convert_btn.setEnabled(False)
@@ -298,7 +311,7 @@ def launch_qt_gui() -> int:
             self.open_report_btn.setEnabled(False)
             self.progress_bar.setVisible(True)
             self._log("-" * 60)
-            self._log(f"Starting conversion: {input_path.name}")
+            self._log(f"Starting conversion: {input_path.name} (envelope_mode={envelope_mode})")
 
             # Launch Background Worker Thread
             self.worker = ConversionWorker(
@@ -306,6 +319,7 @@ def launch_qt_gui() -> int:
                 output_dir=output_dir,
                 extract_fx=extract_fx,
                 dry_run=dry_run,
+                envelope_mode=envelope_mode,
             )
             self.worker.progress_signal.connect(self._log)
             self.worker.finished_signal.connect(self._on_conversion_finished)
@@ -520,6 +534,11 @@ def launch_tk_gui() -> int:
     ttk.Checkbutton(opt_frame, text="Generate ReaScript FX Loader (.lua)", variable=fx_var).pack(side="left", padx=5)
     ttk.Checkbutton(opt_frame, text="Dry Run (Inspect only)", variable=dry_var).pack(side="left", padx=5)
 
+    env_var = tk.StringVar(value="clip")
+    ttk.Label(opt_frame, text="Envelope Target:").pack(side="left", padx=(15, 2))
+    env_combo = ttk.Combobox(opt_frame, textvariable=env_var, values=["clip", "track"], state="readonly", width=8)
+    env_combo.pack(side="left", padx=2)
+
     btn_frame = ttk.Frame(root)
     btn_frame.pack(fill="x", **pad)
     convert_btn = ttk.Button(btn_frame, text="Convert to REAPER Project")
@@ -557,6 +576,7 @@ def launch_tk_gui() -> int:
                     aup3_path=in_p,
                     output_dir=out_d,
                     extract_fx_script=fx_var.get(),
+                    envelope_mode=env_var.get(),
                     dry_run=dry_var.get(),
                     progress_callback=log_msg,
                 )

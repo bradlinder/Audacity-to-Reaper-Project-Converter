@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -54,12 +54,18 @@ class Clip:
     sample_rate: float = 44100.0
     num_samples: int = 0
     sample_format: int = 262159
-    blocks: List[SampleBlock] = field(default_factory=list)
+    channels: int = 1  # 1: Mono, 2: Stereo
+    blocks: List[SampleBlock] = field(default_factory=list)  # Left (or mono) sample blocks
+    right_blocks: List[SampleBlock] = field(default_factory=list)  # Right sample blocks (stereo)
+    group_id: int = 0  # REAPER item group ID (links stereo pair items)
     fade_in_len: float = 0.0
     fade_out_len: float = 0.0
     fade_in_shape: int = 1
     fade_out_shape: int = 1
     gain: float = 1.0
+    pitch_semitones: float = 0.0  # Non-destructive clip pitch shift in semitones
+    color_index: Optional[int] = None  # Audacity clip color index (0-7)
+    color_rgb: Optional[Tuple[int, int, int]] = None  # Explicit (R, G, B) if specified
     envelope_points: List[Tuple[float, float]] = field(default_factory=list)  # (item_time_sec, linear_val)
 
     # Calculated / Extracted media properties
@@ -115,6 +121,7 @@ class Track:
     solo: bool = False
     clips: List[Clip] = field(default_factory=list)
     effects: List[Effect] = field(default_factory=list)
+    stereo_pair_id: Optional[int] = None  # Group identifier linking paired Left and Right tracks
 
 
 @dataclass
@@ -142,6 +149,9 @@ class AudacityProject:
     version: str = ""
     audacity_version: str = ""
     sample_rate: float = 44100.0
+    tempo: float = 120.0  # Project BPM
+    time_sig_numerator: int = 4  # Time signature numerator
+    time_sig_denominator: int = 4  # Time signature denominator
     tracks: List[Track] = field(default_factory=list)
     markers: List[Marker] = field(default_factory=list)
     regions: List[Region] = field(default_factory=list)

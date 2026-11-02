@@ -6,6 +6,7 @@ Stitches Audacity sample blocks per clip and writes standard uncompressed WAV fi
 
 from __future__ import annotations
 
+import array
 import logging
 import re
 import sqlite3
@@ -13,9 +14,75 @@ import struct
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from .models import AudacityProject, Clip, Track
+from .models import AudacityProject, Clip, SampleBlock, Track
 
 logger = logging.getLogger(__name__)
+
+
+def interleave_stereo_channels(left_bytes: bytes, right_bytes: bytes, sample_width: int) -> bytes:
+    """Interleave left and right channel PCM/float bytes into a 2-channel stereo stream.
+    
+    Pads the shorter channel with silence if lengths differ, and uses Python's native
+    array module for high-speed C-level vector interleaving.
+    """
+    len_l = len(left_bytes)
+    len_r = len(right_bytes)
+    max_len = max(len_l, len_r)
+
+    # Align to full sample boundary
+    rem = max_len % sample_width
+    if rem != 0:
+        max_len += (sample_width - rem)
+
+    if len(left_bytes) < max_len:
+        left_bytes = left_bytes + b"\x00" * (max_len - len(left_bytes))
+    if len(right_bytes) < max_len:
+        right_bytes = right_bytes + b"\x00" * (max_len - len(right_bytes))
+
+    num_samples = max_len // sample_width
+    if num_samples == 0:
+        return b""
+
+    if sample_width == 4:
+        l_arr = array.array("i")
+        l_arr.frombytes(left_bytes[: num_samples * 4])
+        r_arr = array.array("i")
+        r_arr.frombytes(right_bytes[: num_samples * 4])
+
+        interleaved = array.array("i", [0] * (num_samples * 2))
+        interleaved[0::2] = l_arr
+        interleaved[1::2] = r_arr
+        return interleaved.tobytes()
+
+    elif sample_width == 2:
+        l_arr = array.array("h")
+        l_arr.frombytes(left_bytes[: num_samples * 2])
+        r_arr = array.array("h")
+        r_arr.frombytes(right_bytes[: num_samples * 2])
+
+        interleaved = array.array("h", [0] * (num_samples * 2))
+        interleaved[0::2] = l_arr
+        interleaved[1::2] = r_arr
+        return interleaved.tobytes()
+
+    elif sample_width == 3:
+        # 24-bit PCM: 3 bytes per sample
+        out = bytearray(num_samples * 6)
+        for i in range(num_samples):
+            src = i * 3
+            dst = i * 6
+            out[dst : dst + 3] = left_bytes[src : src + 3]
+            out[dst + 3 : dst + 6] = right_bytes[src : src + 3]
+        return bytes(out)
+
+    else:
+        out = bytearray(num_samples * 2 * sample_width)
+        for i in range(num_samples):
+            src = i * sample_width
+            dst = i * 2 * sample_width
+            out[dst : dst + sample_width] = left_bytes[src : src + sample_width]
+            out[dst + sample_width : dst + 2 * sample_width] = right_bytes[src : src + sample_width]
+        return bytes(out)
 
 
 def sanitize_filename(name: str) -> str:
@@ -137,30 +204,70 @@ class AudioExtractor:
         self.used_filenames.add(candidate.lower())
         return candidate
 
+    def _fetch_stitched_blocks(
+        self,
+        blocks: List[SampleBlock],
+        default_format: int,
+        conn: sqlite3.Connection,
+    ) -> Tuple[bytes, int]:
+        """Fetch and stitch sample blocks from database for a single channel.
+        
+        Returns: (stitched_bytes, detected_sample_format)
+        """
+        cur = conn.cursor()
+        stitched_data = bytearray()
+        sample_format = default_format
+        sorted_blocks = sorted(blocks, key=lambda b: b.start)
+
+        for block in sorted_blocks:
+            cur.execute("SELECT sampleformat, samples FROM sampleblocks WHERE blockid = ?;", (block.block_id,))
+            row = cur.fetchone()
+            if not row or not row[1]:
+                logger.warning("Missing sample block ID %d in sampleblocks table.", block.block_id)
+                sample_width = 4 if sample_format in (262159, 2) else (3 if sample_format in (262145, 1, 24) else 2)
+                silence_len = (block.length or 262144) * sample_width
+                stitched_data.extend(b"\x00" * silence_len)
+                continue
+
+            blk_fmt, blk_data = row[0], bytes(row[1])
+            if blk_fmt is not None:
+                sample_format = blk_fmt
+
+            sample_width = 4 if sample_format in (262159, 2) else (3 if sample_format in (262145, 1, 24) else 2)
+
+            if block.length > 0 and len(blk_data) > block.length * sample_width:
+                blk_data = blk_data[: block.length * sample_width]
+
+            stitched_data.extend(blk_data)
+
+        return bytes(stitched_data), sample_format
+
     def extract_clip_audio(
         self,
         clip: Clip,
         track_name: str,
         conn: sqlite3.Connection,
     ) -> Tuple[Optional[Path], float, int]:
-        """Stitch all sample blocks of a clip and write to WAV file.
+        """Stitch sample blocks of a clip (mono or interleaved stereo) and write to WAV file.
         
         Returns: (output_path, duration_seconds, bytes_written)
         """
-        if not clip.blocks:
+        if not clip.blocks and not clip.right_blocks:
             logger.warning("Clip '%s' has no sample blocks defined.", clip.name)
             return None, 0.0, 0
 
-        # Sort blocks by start position
-        sorted_blocks = sorted(clip.blocks, key=lambda b: b.start)
+        # Sort blocks for sequence signature
+        left_sorted = tuple(b.block_id for b in sorted(clip.blocks, key=lambda b: b.start))
+        right_sorted = tuple(b.block_id for b in sorted(clip.right_blocks, key=lambda b: b.start))
 
         # Check sequence cache: if multiple clips share the exact same sequence of blocks,
-        # reuse the already extracted audio WAV file. REAPER items reference this WAV with their
-        # individual SOFFS (start trim offset) and LENGTH, avoiding multi-gigabyte duplicates.
+        # reuse the already extracted audio WAV file.
         block_signature = (
-            tuple(b.block_id for b in sorted_blocks),
+            left_sorted,
+            right_sorted,
             int(clip.sample_rate),
             clip.sample_format,
+            clip.channels,
         )
         if block_signature in self.sequence_cache:
             cached_path, cached_fname, cached_dur, cached_bytes = self.sequence_cache[block_signature]
@@ -174,41 +281,26 @@ class AudioExtractor:
             )
             return cached_path, cached_dur, 0
 
-        cur = conn.cursor()
-        stitched_data = bytearray()
-        sample_format = clip.sample_format
+        # Stitch primary (left or mono) blocks
+        left_bytes, sample_format = self._fetch_stitched_blocks(clip.blocks, clip.sample_format, conn)
+        sample_width = 4 if sample_format in (262159, 2) else (3 if sample_format in (262145, 1, 24) else 2)
 
-        for block in sorted_blocks:
-            cur.execute("SELECT sampleformat, samples FROM sampleblocks WHERE blockid = ?;", (block.block_id,))
-            row = cur.fetchone()
-            if not row or not row[1]:
-                logger.warning("Missing sample block ID %d in sampleblocks table.", block.block_id)
-                # Pad with silence if block is missing
-                sample_width = 4 if sample_format in (262159, 2) else 2
-                silence_len = (block.length or 262144) * sample_width
-                stitched_data.extend(b"\x00" * silence_len)
-                continue
+        # Handle 2-channel stereo clips
+        if clip.channels == 2 and clip.right_blocks:
+            right_bytes, _ = self._fetch_stitched_blocks(clip.right_blocks, sample_format, conn)
+            raw_audio = interleave_stereo_channels(left_bytes, right_bytes, sample_width)
+            wav_channels = 2
+            total_samples = len(raw_audio) // (sample_width * 2)
+        else:
+            raw_audio = left_bytes
+            wav_channels = 2 if clip.channels == 2 else 1
+            total_samples = len(raw_audio) // (sample_width * wav_channels)
 
-            blk_fmt, blk_data = row[0], bytes(row[1])
-            if blk_fmt is not None:
-                sample_format = blk_fmt
-
-            sample_width = 4 if sample_format in (262159, 2) else 2
-
-            # Truncate if explicit length specified
-            if block.length > 0 and len(blk_data) > block.length * sample_width:
-                blk_data = blk_data[: block.length * sample_width]
-
-            stitched_data.extend(blk_data)
-
-        if not stitched_data:
+        if not raw_audio:
             return None, 0.0, 0
 
         filename = self.generate_clip_filename(track_name, clip.clip_index, clip.timeline_offset)
         out_path = self.media_dir / filename
-
-        sample_width = 4 if sample_format in (262159, 2) else 2
-        total_samples = len(stitched_data) // sample_width
         duration = total_samples / clip.sample_rate if clip.sample_rate > 0 else 0.0
 
         if out_path.exists() and out_path.stat().st_size > 44:
@@ -219,9 +311,9 @@ class AudioExtractor:
             try:
                 bytes_written = write_wav_file(
                     output_path=out_path,
-                    raw_samples=bytes(stitched_data),
+                    raw_samples=raw_audio,
                     sample_rate=int(clip.sample_rate),
-                    channels=1,
+                    channels=wav_channels,
                     sample_format=sample_format,
                 )
             except PermissionError:
@@ -239,8 +331,9 @@ class AudioExtractor:
         self.sequence_cache[block_signature] = (out_path, filename, duration, bytes_written)
 
         logger.info(
-            "Extracted clip '%s' -> %s (%.2f s, %d bytes)",
+            "Extracted clip '%s' (ch=%d) -> %s (%.2f s, %d bytes)",
             clip.name,
+            wav_channels,
             filename,
             duration,
             bytes_written,

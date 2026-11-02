@@ -69,6 +69,13 @@ Examples:
     )
 
     parser.add_argument(
+        "--envelope-mode",
+        choices=["clip", "track"],
+        default="clip",
+        help="Volume envelope conversion target: 'clip' (REAPER take/clip envelope, default) or 'track' (REAPER track volume automation lane).",
+    )
+
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Inspect and print conversion plan without extracting media or writing files.",
@@ -116,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
             aup3_path=input_path,
             output_dir=args.output_dir,
             extract_fx_script=args.extract_fx_script,
+            envelope_mode=args.envelope_mode,
             dry_run=args.dry_run,
         )
 

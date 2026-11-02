@@ -8,8 +8,8 @@
 
 ```mermaid
 flowchart LR
-    A["Phase 1: Rebrand & UI Core"] --> B["Phase 2: Format Expansion (.aup / .aup4)"]
-    B --> C["Phase 3: Stereo & Visual Fidelity"]
+    A["Phase 1: Rebrand & UI Core"] --> B["Phase 2: Stereo, Envelopes & Session Fidelity"]
+    B --> C["Phase 3: Format Expansion (.aup / .aup4)"]
     C --> D["Phase 4: Cross-Platform Packaging"]
 ```
 
@@ -24,36 +24,41 @@ flowchart LR
   - Design a clean, high-contrast, scalable vector icon (and export `.ico`, `.icns`, `.png`).
   - **Design Specification:** A clean, horizontal arrow pointing left-to-right with a bold letter **A** on the left and a bold letter **R** on the right.
   - *Constraint:* Strict avoidance of any official Audacity (soundwave headphones) or REAPER (scythe) logos or trademarked graphics.
-- [ ] **1.3 Native Drag-and-Drop:**
-  - Enable dragging and dropping project files directly onto the Qt application window to populate the source file path automatically.
-- [ ] **1.4 Non-Intrusive Update Checker:**
-  - Background check against the GitHub Releases API on startup.
-  - If a newer release exists, display a subtle clickable link/pill in the status bar (*"Update available: v1.1.0"*). No modal popups or blocking behavior.
 
 ---
 
-## Phase 2: Extended Format Support (`.aup` and `.aup4`)
+## Phase 2: Stereo, Envelopes & Session Fidelity
 *Status: Planned*
 
-- [ ] **2.1 Legacy Audacity (`.aup` + `_data` folder) Support:**
+- [x] **2.1 Full Stereo Channel Modes:**
+  - Handle interleaved 2-channel stereo tracks (extracting true 2-channel WAVs or splitting cleanly based on track definition).
+  - Preserve dual-mono stereo link groupings and pan assignments in REAPER.
+- [x] **2.2 Audacity Clip Colors → REAPER Item Colors:**
+  - Read Audacity's clip `colorindex` attribute (Audacity 3.2+ color-coding palette).
+  - Map each index to REAPER's item color tag (`SETCOLOR` / `PEAKCOL`) so clip color-coding is visually preserved in REAPER's arrange view.
+- [x] **2.3 Configurable Volume Envelope Conversion (Clip vs. Track):**
+  - Provide an option allowing users to choose whether Audacity volume envelope control points are converted as REAPER take/clip envelopes (`VOLENV`) or track-level automation envelopes (`VOLENV2`).
+  - Normalize timestamps, scaling, and dB curve values appropriately for the selected target envelope mode.
+- [x] **2.4 Timeline Tempo & Grid Synchronization:**
+  - Detect session tempo (BPM) and time signature settings from Audacity's timeline and write standard REAPER `<TEMPO` markers to keep project grid divisions aligned.
+- [x] **2.5 Clip Gain Slider & Pitch Shift Preservation:**
+  - Parse Audacity 3.2+ clip gain attributes (per-clip dB trim) from `<waveclip>` and map to REAPER item `VOLPAN`.
+  - Parse Audacity 3.1+ non-destructive clip pitch attributes (semitones/cents) and map to REAPER item `PITCH` parameters without destructive re-rendering.
+- [ ] **2.6 Direct REAPER `<FXCHAIN>` Embedding for Stock FX:**
+  - Embed native `<FXCHAIN>` chunks directly into REAPER track blocks in `.rpp` for recognized stock effects (e.g. ReaEQ, ReaComp), removing the need to execute external Lua scripts for standard plugin chains.
+
+---
+
+## Phase 3: Extended Format Support (`.aup` and `.aup4`)
+*Status: Planned*
+
+- [ ] **3.1 Legacy Audacity (`.aup` + `_data` folder) Support:**
   - Parse legacy Audacity 1.x–2.x XML session trees.
   - Stitch block files from the project's `_data/` directory (standard Sun/NeXT `.au` format).
   - Map legacy track pan/gain, envelope control points, and labels directly into `.rpp`.
-- [ ] **2.2 Future-Proof Audacity 4 (`.aup4`) Support:**
+- [ ] **3.2 Future-Proof Audacity 4 (`.aup4`) Support:**
   - Ensure compatibility with Muse Group's next-gen Audacity 4 SQLite schemas.
   - Implement dynamic table and column inspection to automatically handle upcoming schema additions (e.g., non-destructive clip pitch attributes, track hierarchy).
-
----
-
-## Phase 3: Stereo Modes & Visual Fidelity
-*Status: Planned*
-
-- [ ] **3.1 Full Stereo Channel Modes:**
-  - Handle interleaved 2-channel stereo tracks (extracting true 2-channel WAVs or splitting cleanly based on track definition).
-  - Preserve dual-mono stereo link groupings and pan assignments in REAPER.
-- [ ] **3.2 Audacity Clip Colors → REAPER Item Colors:**
-  - Read Audacity's clip `colorindex` attribute (Audacity 3.2+ color-coding palette).
-  - Map each index to REAPER's item color tag (`SETCOLOR` / `PEAKCOL`) so clip color-coding is visually preserved in REAPER's arrange view.
 
 ---
 
@@ -62,10 +67,15 @@ flowchart LR
 
 - [ ] **4.1 Qt Desktop Application Hardening:**
   - Ensure the PySide6 UI adheres strictly to a clean, focused single-window design without extraneous tabs, menus, or unrequested graphics.
-- [ ] **4.2 Build Specifications:**
+- [ ] **4.2 Native Drag-and-Drop:**
+  - Enable dragging and dropping project files directly onto the Qt application window to populate the source file path automatically.
+- [ ] **4.3 Non-Intrusive Update Checker:**
+  - Background check against the GitHub Releases API on startup.
+  - If a newer release exists, display a subtle clickable link/pill in the status bar (*"Update available: v1.1.0"*). No modal popups or blocking behavior.
+- [ ] **4.4 Build Specifications:**
   - Windows: Single portable `.exe` and Inno Setup installer (`.exe`) with Start Menu shortcuts and clean uninstall.
   - macOS: Apple Disk Image (`.dmg`) bundling an arm64 / universal `.app` bundle.
   - Linux: Self-contained `.AppImage` with desktop integration metadata.
-- [ ] **4.3 Automated GitHub Actions Workflow:**
+- [ ] **4.5 Automated GitHub Actions Workflow:**
   - Matrix build pipeline (`windows-latest`, `macos-latest`, `ubuntu-latest`).
   - Automated compilation, testing, and release asset publishing upon tagging git releases.
