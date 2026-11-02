@@ -1,8 +1,63 @@
-node_modules/
+# Python bytecode & environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 build/
+develop-eggs/
 dist/
-coverage/
-.DS_Store
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+env/
+venv/
+ENV/
+
+# Large audio & test session files
+*.wav
+*.wave
+*.aif
+*.aiff
+*.flac
+*.ogg
+*.mp3
+media/
+
+# Audacity databases & lock files
+*.aup3
+*.aup3-wal
+*.aup3-shm
+*.aup
+*_data/
+
+# Generated outputs & scratch test directories
+test_output*/
+/*_reaper/
+!audacity_to_reaper/
+!aup3_to_reaper/
+scratch*/
+*.tmp
 *.log
+
+# OS & Editor metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+node_modules/
 .env*
 !.env.example

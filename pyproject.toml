@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audacity-to-reaper"
+version = "1.1.0"
+description = "Standalone, offline converter for Audacity projects into Cockos REAPER projects (.rpp)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Audacity to REAPER Project Converter Developers" }
+]
+keywords = ["audacity", "reaper", "aup3", "aup", "rpp", "audio", "daw", "converter"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Multimedia :: Sound/Audio :: Conversion",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+]
+
+[project.scripts]
+audacity-to-reaper = "audacity_to_reaper.cli:main"
+audacity-to-reaper-gui = "audacity_to_reaper.gui:launch_gui"
+aup3-to-reaper = "audacity_to_reaper.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["audacity_to_reaper*", "aup3_to_reaper*"]
